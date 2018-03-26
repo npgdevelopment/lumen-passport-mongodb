@@ -63,7 +63,7 @@ class AccessTokenController extends \MoeenBasra\LaravelPassportMongoDB\Http\Cont
     {
         $grant = new \League\OAuth2\Server\Grant\PasswordGrant(
             app()->make(\MoeenBasra\LaravelPassportMongoDB\Bridge\UserRepository::class),
-            app()->make(\MoeenBasra\LaravelPassportMongoDB\Bridge\RefreshTokenRepository::class)
+            app()->make(\Kayrules\LumenPassport\Bridge\RefreshTokenRepository::class)
         );
 
         $grant->setRefreshTokenTTL(Passport::refreshTokensExpireIn());

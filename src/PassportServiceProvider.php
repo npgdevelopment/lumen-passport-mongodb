@@ -6,11 +6,32 @@ use Kayrules\LumenPassport\Console\Commands\Purge;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Database\Connection;
 
+use DateInterval;
+use Illuminate\Auth\RequestGuard;
+use Illuminate\Auth\Events\Logout;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Cookie;
+use Illuminate\Support\Facades\Request;
+use MoeenBasra\LaravelPassportMongoDB\Guards\TokenGuard;
+use League\OAuth2\Server\CryptKey;
+use League\OAuth2\Server\ResourceServer;
+use League\OAuth2\Server\AuthorizationServer;
+use League\OAuth2\Server\Grant\AuthCodeGrant;
+use League\OAuth2\Server\Grant\ImplicitGrant;
+use League\OAuth2\Server\Grant\PasswordGrant;
+use MoeenBasra\LaravelPassportMongoDB\Bridge\PersonalAccessGrant;
+use League\OAuth2\Server\Grant\RefreshTokenGrant;
+use MoeenBasra\LaravelPassportMongoDB\Bridge\RefreshTokenRepository;
+use League\OAuth2\Server\Grant\ClientCredentialsGrant;
+use MoeenBasra\LaravelPassportMongoDB\Passport;
+
+
 /**
  * Class CustomQueueServiceProvider
  * @package App\Providers
  */
-class PassportServiceProvider extends ServiceProvider
+class PassportServiceProvider extends \MoeenBasra\LaravelPassportMongoDB\PassportServiceProvider
 {
 
     /**
@@ -34,6 +55,9 @@ class PassportServiceProvider extends ServiceProvider
         }
 
         $this->registerRoutes();
+        $this->registerAuthorizationServer();
+
+        $this->registerResourceServer();
     }
     /**
      * @return void
@@ -145,4 +169,118 @@ class PassportServiceProvider extends ServiceProvider
             ]);
         });
     }
+    
+    /**
+     * Register the authorization server.
+     *
+     * @return void
+     */
+    protected function registerAuthorizationServer()
+    {
+        $this->app->singleton(AuthorizationServer::class, function () {
+            
+            return tap($this->makeAuthorizationServer(), function ($server) {
+                $server->enableGrantType(
+                    $this->makeAuthCodeGrant(), Passport::tokensExpireIn()
+                );
+                
+                $server->enableGrantType(
+                    $this->makeRefreshTokenGrant(), Passport::tokensExpireIn()
+                );
+
+                $server->enableGrantType(
+                    $this->makePasswordGrant(), Passport::tokensExpireIn()
+                );
+
+                $server->enableGrantType(
+                    new PersonalAccessGrant, new DateInterval('P1Y')
+                );
+
+                $server->enableGrantType(
+                    new ClientCredentialsGrant, Passport::tokensExpireIn()
+                );
+
+                if (Passport::$implicitGrantEnabled) {
+                    $server->enableGrantType(
+                        $this->makeImplicitGrant(), Passport::tokensExpireIn()
+                    );
+                }
+            });
+        });
+    }
+    
+    /**
+     * Build the Auth Code grant instance.
+     *
+     * @return \League\OAuth2\Server\Grant\AuthCodeGrant
+     */
+    protected function buildAuthCodeGrant()
+    {
+        return new AuthCodeGrant(
+            $this->app->make(\MoeenBasra\LaravelPassportMongoDB\Bridge\AuthCodeRepository::class),
+            $this->app->make(Bridge\RefreshTokenRepository::class),
+            new DateInterval('PT10M')
+        );
+    }
+    
+    /**
+     * Create and configure a Refresh Token grant instance.
+     *
+     * @return \League\OAuth2\Server\Grant\RefreshTokenGrant
+     */
+    protected function makeRefreshTokenGrant()
+    {
+        $repository = $this->app->make(Bridge\RefreshTokenRepository::class);
+        
+        return tap(new RefreshTokenGrant($repository), function ($grant) {
+            $grant->setRefreshTokenTTL(Passport::refreshTokensExpireIn());
+        });
+    }
+    
+    /**
+     * Create and configure a Password grant instance.
+     *
+     * @return \League\OAuth2\Server\Grant\PasswordGrant
+     */
+    protected function makePasswordGrant()
+    {
+        $grant = new PasswordGrant(
+            $this->app->make(\MoeenBasra\LaravelPassportMongoDB\Bridge\UserRepository::class),
+            $this->app->make(Bridge\RefreshTokenRepository::class)
+        );
+
+        $grant->setRefreshTokenTTL(Passport::refreshTokensExpireIn());
+
+        return $grant;
+    }
+    
+    /**
+     * Make the authorization service instance.
+     *
+     * @return \League\OAuth2\Server\AuthorizationServer
+     */
+    public function makeAuthorizationServer()
+    {      
+        return new AuthorizationServer(
+            $this->app->make(\MoeenBasra\LaravelPassportMongoDB\Bridge\ClientRepository::class),
+            $this->app->make(\Kayrules\LumenPassport\Bridge\AccessTokenRepository::class),
+            $this->app->make(\MoeenBasra\LaravelPassportMongoDB\Bridge\ScopeRepository::class),
+            $this->makeCryptKey('oauth-private.key'),
+            app('encrypter')->getKey()
+        );
+    }
+    /**
+     * Register the resource server.
+     *
+     * @return void
+     */
+    protected function registerResourceServer()
+    {   
+        $this->app->singleton(\League\OAuth2\Server\ResourceServer::class, function () {
+            return new ResourceServer(
+                $this->app->make(\Kayrules\LumenPassport\Bridge\AccessTokenRepository::class),
+                $this->makeCryptKey('oauth-public.key')
+            );
+        });
+    }   
 }
